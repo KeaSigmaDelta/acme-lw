@@ -48,8 +48,12 @@ public:
     /**
         The signingKey is the Acme account private key used to sign
         requests to the acme CA, in pem format.
+        
+        @param signingKey the private key for the ACME account
+        @param directoryURL the ACME server's directory URL. Defaults to LetsEncrypt
+        if left blank  
     */
-    AcmeClient(const std::string& signingKey);
+    AcmeClient(const std::string& signingKey, const std::string& directoryURL = ""); // ##### FIXME! ##### Have AcmeAccount class?
 
     ~AcmeClient();
 
@@ -77,17 +81,6 @@ public:
         throws std::exception, usually an instance of acme_lw::AcmeException
     */
     Certificate issueCertificate(const std::list<std::string>& domainNames, Callback);
-
-    /**
-        Call once before instantiating AcmeClient.
-        
-        Note that this calls Let's Encrypt servers and so can throw
-        if they're having issues.
-    */
-    static void init();
-
-    // Call once before application shutdown.
-    static void teardown();
 
 private:
     std::unique_ptr<AcmeClientImpl> impl_;

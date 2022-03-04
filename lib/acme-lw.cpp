@@ -356,15 +356,16 @@ T extractExpiryData(const acme_lw::Certificate& certificate, const function<T (c
 namespace acme_lw
 {
 
-string newAccountUrl;
-string newOrderUrl;
-string newNonceUrl;
-
 struct AcmeClientImpl
 {
-    AcmeClientImpl(const string& accountPrivateKey)
-        : privateKey_(EVP_PKEY_new())
+    AcmeClientImpl(const string& accountPrivateKey, const std::string& directoryUrl)
+        : privateKey_(EVP_PKEY_new()), directoryUrl_(directoryUrl)
     {
+        if(!directoryUrl_.length()) {
+            // Use the default URL
+            directoryUrl_ = ::directoryUrl;
+        }
+
         // Create the private key and 'header suffix', used to sign LE certs.
         BIOptr bio(BIO_new_mem_buf(accountPrivateKey.c_str(), -1));
         RSA * rsa(PEM_read_bio_RSAPrivateKey(*bio, nullptr, nullptr, nullptr));
@@ -397,7 +398,9 @@ struct AcmeClientImpl
                 "jwk": )" + jwkValue + "}";
 
         pair<string, string> header = make_pair("location"s, ""s);
-        sendRequest<string>(newAccountUrl, u8R"(
+        
+        initIfNeeded();
+        sendRequest<string>(newAccountUrl_, u8R"(
                                                 {
                                                     "termsOfServiceAgreed": true,
                                                     "onlyReturnExisting": false
@@ -432,12 +435,33 @@ struct AcmeClientImpl
 
         return urlSafeBase64Encode(signature);
     }
+    
+    void initIfNeeded()
+    {
+        if(newAccountUrl_.length() > 0) {
+            // Already initialized
+            return;
+        }
+        
+        try
+        {
+            string directory = toT<string>(doGet(directoryUrl));
+            auto json = nlohmann::json::parse(directory);
+            newAccountUrl_ = json.at("newAccount");
+            newOrderUrl_ = json.at("newOrder");
+            newNonceUrl_ = json.at("newNonce");
+        }
+        catch (const exception& e)
+        {
+            throw AcmeException("Unable to initialize endpoints from "s + directoryUrl + ": " + e.what());
+        }
+    }
 
     template<typename T>
     T sendRequest(const string& url, const string& payload, pair<string, string> * header = nullptr)
     {
         string protectd = u8R"({"nonce": ")"s +
-                                    getHeader(newNonceUrl, "replay-nonce") + "\"," +
+                                    getHeader(newNonceUrl_, "replay-nonce") + "\"," +
                                     u8R"("url": ")" + url + "\"," +
                                     headerSuffix_;
 
@@ -503,6 +527,8 @@ struct AcmeClientImpl
 
     Certificate issueCertificate(const list<string>& domainNames, AcmeClient::Callback callback)
     {
+        initIfNeeded();
+        
         if (domainNames.empty())
         {
             throw AcmeException("There must be at least one domain name in a certificate");
@@ -539,7 +565,7 @@ struct AcmeClientImpl
         payload += "]}";
 
         pair<string, string> header = make_pair("location"s, ""s);
-        string response = sendRequest<string>(newOrderUrl, payload, &header);
+        string response = sendRequest<string>(newOrderUrl_, payload, &header);
         string currentOrderUrl = header.second;
 
         // Pass the challenges
@@ -600,10 +626,15 @@ private:
     string      headerSuffix_;
     EVP_PKEYptr privateKey_;
     string      jwkThumbprint_;
+    
+    string      directoryUrl_;
+    string      newAccountUrl_;
+    string      newOrderUrl_;
+    string      newNonceUrl_;
 };
 
-AcmeClient::AcmeClient(const string& accountPrivateKey)
-    : impl_(new AcmeClientImpl(accountPrivateKey))
+AcmeClient::AcmeClient(const string& accountPrivateKey, const std::string& directoryUrl)
+    : impl_(new AcmeClientImpl(accountPrivateKey, directoryUrl))
 {
 }
 
@@ -612,26 +643,6 @@ AcmeClient::~AcmeClient() = default;
 Certificate AcmeClient::issueCertificate(const std::list<std::string>& domainNames, Callback callback)
 {
     return impl_->issueCertificate(domainNames, callback);
-}
-
-void AcmeClient::init()
-{
-    try
-    {
-        string directory = toT<string>(doGet(directoryUrl));
-        auto json = nlohmann::json::parse(directory);
-        newAccountUrl = json.at("newAccount");
-        newOrderUrl = json.at("newOrder");
-        newNonceUrl = json.at("newNonce");
-    }
-    catch (const exception& e)
-    {
-        throw AcmeException("Unable to initialize endpoints from "s + directoryUrl + ": " + e.what());
-    }
-}
-
-void AcmeClient::teardown()
-{
 }
 
 ::time_t Certificate::getExpiry() const

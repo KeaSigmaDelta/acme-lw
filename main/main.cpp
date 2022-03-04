@@ -52,9 +52,6 @@ int main(int argc, char * argv[])
 
     try
     {
-        // Should be called once per process before a use of AcmeClient.
-        acme_lw::AcmeClient::init();
-
         string accountPrivateKey = readFile(argv[1]);
         acme_lw::AcmeClient acmeClient(accountPrivateKey);
 
@@ -77,9 +74,6 @@ int main(int argc, char * argv[])
         cout << "Failed with error: " << e.what() << "\n";
         exitStatus = 1;
     }
-
-    // Should be called to free resources allocated in AcmeClient::init
-    acme_lw::AcmeClient::teardown();
 
     return exitStatus;
 }

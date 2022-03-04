@@ -29,3 +29,4 @@ Makefile
 CMakeFiles
 *.cmake
 install_manifest.txt
+/build
