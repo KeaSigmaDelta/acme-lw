@@ -60,6 +60,8 @@ int main(int argc, char * argv[])
         {
             domainNames.push_back(argv[i]);
         }
+		
+		printf("Terms of service URL: %s\n", acmeClient.getTermsOfServiceUrl().c_str());
 
         acme_lw::Certificate certificate = acmeClient.issueCertificate(domainNames, handleChallenge);
 

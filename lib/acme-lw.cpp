@@ -34,6 +34,7 @@ using namespace acme_lw_internal;
 namespace
 {
 
+#define STAGING
 #ifdef STAGING
 const char * directoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory";
 #else
@@ -450,6 +451,7 @@ struct AcmeClientImpl
             newAccountUrl_ = json.at("newAccount");
             newOrderUrl_ = json.at("newOrder");
             newNonceUrl_ = json.at("newNonce");
+			termsOfServiceUrl_ = json["meta"].at("termsOfService");
         }
         catch (const exception& e)
         {
@@ -622,6 +624,12 @@ struct AcmeClientImpl
         return cert;
     }
 
+    const std::string& getTermsOfServiceUrl()
+    {
+        initIfNeeded();
+        return termsOfServiceUrl_;
+    }
+
 private:
     string      headerSuffix_;
     EVP_PKEYptr privateKey_;
@@ -631,6 +639,8 @@ private:
     string      newAccountUrl_;
     string      newOrderUrl_;
     string      newNonceUrl_;
+    
+    string      termsOfServiceUrl_;
 };
 
 AcmeClient::AcmeClient(const string& accountPrivateKey, const std::string& directoryUrl)
@@ -643,6 +653,11 @@ AcmeClient::~AcmeClient() = default;
 Certificate AcmeClient::issueCertificate(const std::list<std::string>& domainNames, Callback callback)
 {
     return impl_->issueCertificate(domainNames, callback);
+}
+
+const std::string& AcmeClient::getTermsOfServiceUrl()
+{
+    return impl_->getTermsOfServiceUrl();
 }
 
 ::time_t Certificate::getExpiry() const

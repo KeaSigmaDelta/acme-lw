@@ -81,6 +81,11 @@ public:
         throws std::exception, usually an instance of acme_lw::AcmeException
     */
     Certificate issueCertificate(const std::list<std::string>& domainNames, Callback);
+    
+    /**
+        Gets the terms of service URL.
+    */
+    const std::string& getTermsOfServiceUrl();
 
 private:
     std::unique_ptr<AcmeClientImpl> impl_;
