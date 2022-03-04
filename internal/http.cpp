@@ -17,11 +17,13 @@ namespace
  */
 class CURLGlobalInit {
 private:
-    inline CURLGlobalInit() {
+    inline CURLGlobalInit() 
+    {
         curl_global_init(CURL_GLOBAL_DEFAULT);
     }
 
-    inline ~CURLGlobalInit() {
+    inline ~CURLGlobalInit() 
+    {
         curl_global_cleanup();
     }
 
