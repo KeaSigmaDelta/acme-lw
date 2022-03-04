@@ -13,6 +13,24 @@ using namespace acme_lw;
 namespace
 {
 
+/** Handles automatic CURL initialization & teardown.
+ */
+class CURLGlobalInit {
+private:
+    inline CURLGlobalInit() {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+    }
+
+    inline ~CURLGlobalInit() {
+        curl_global_cleanup();
+    }
+
+    static CURLGlobalInit curlGlobalInit_;
+}
+
+CURLGlobalInit::curlGlobalInit_;
+
+
 struct Ptr
 {
     Ptr()
@@ -89,16 +107,6 @@ string getCurlError(const string& s, CURLcode c)
 
 namespace acme_lw_internal
 {
-
-void initHttp()
-{
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-}
-
-void teardownHttp()
-{
-    curl_global_cleanup();
-}
 
 void doCurl(Ptr& curl, const string& url, const vector<char>& response)
 {

@@ -17,7 +17,4 @@ struct Response
 
 Response doPost(const std::string& url, const std::string& postBody, const char * headerKey = nullptr);
 
-void initHttp();
-void teardownHttp();
-
 }

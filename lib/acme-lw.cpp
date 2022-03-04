@@ -616,8 +616,6 @@ Certificate AcmeClient::issueCertificate(const std::list<std::string>& domainNam
 
 void AcmeClient::init()
 {
-    initHttp();
-
     try
     {
         string directory = toT<string>(doGet(directoryUrl));
@@ -634,7 +632,6 @@ void AcmeClient::init()
 
 void AcmeClient::teardown()
 {
-    teardownHttp();
 }
 
 ::time_t Certificate::getExpiry() const
