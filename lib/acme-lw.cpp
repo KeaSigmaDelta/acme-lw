@@ -34,7 +34,6 @@ using namespace acme_lw_internal;
 namespace
 {
 
-#define STAGING
 #ifdef STAGING
 const char * directoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory";
 #else
@@ -366,7 +365,7 @@ struct AcmeClientImpl
             // Use the default URL
             directoryUrl_ = ::directoryUrl;
         }
-
+        
         // Create the private key and 'header suffix', used to sign LE certs.
         BIOptr bio(BIO_new_mem_buf(accountPrivateKey.c_str(), -1));
         RSA * rsa(PEM_read_bio_RSAPrivateKey(*bio, nullptr, nullptr, nullptr));
@@ -374,42 +373,78 @@ struct AcmeClientImpl
         {
             throw AcmeException("Unable to read private key");
         }
-
+        
         // rsa will get freed when privateKey_ is freed
         if (!EVP_PKEY_assign_RSA(*privateKey_, rsa))
         {
             throw AcmeException("Unable to assign RSA to private key");
         }
 
+        jwkValue_ = privateKeyToJWKValue(rsa);
+        jwkThumbprint_ = makeJwkThumbprint(jwkValue_);
+    }
+
+    string privateKeyToJWKValue(RSA *rsa)
+    {
         const BIGNUM *n, *e, *d;
         RSA_get0_key(rsa, &n, &e, &d);
 
         // Note json keys must be in lexographical order.
-        string jwkValue = u8R"( {
+        return u8R"( {
                                     "e":")"s + urlSafeBase64Encode(e) + u8R"(",
                                     "kty": "RSA",
                                     "n":")"s + urlSafeBase64Encode(n) + u8R"("
                                 })";
-        jwkThumbprint_ = makeJwkThumbprint(jwkValue);
-
+    }
+    
+    bool setupAccount(bool allowCreateNew, bool termsOfServiceAgreed) 
+    {
         // We use jwk for the first request, which allows us to get 
         // the account id. We use that thereafter.
         headerSuffix_ = u8R"(
                 "alg": "RS256",
-                "jwk": )" + jwkValue + "}";
+                "jwk": )" + jwkValue_ + "}";
 
         pair<string, string> header = make_pair("location"s, ""s);
         
+        const string trueStr = u8"true";
+        const string falseStr = u8"false";
+        string tosAgreedStr = termsOfServiceAgreed ? trueStr : falseStr;
+        string onlyReturnExistingStr = !allowCreateNew ? trueStr : falseStr;
+        
         initIfNeeded();
-        sendRequest<string>(newAccountUrl_, u8R"(
+        
+        try
+        {
+            sendRequest<string>(newAccountUrl_, u8R"(
                                                 {
-                                                    "termsOfServiceAgreed": true,
-                                                    "onlyReturnExisting": false
+                                                    "termsOfServiceAgreed": )"s + tosAgreedStr + u8R"(,
+                                                    "onlyReturnExisting": )"s + onlyReturnExistingStr + u8R"(
                                                 }
                                                 )", &header);
+        }
+        catch(const std::exception &e)
+        {
+            const acme_lw::AcmeException *acmeException = dynamic_cast<const acme_lw::AcmeException*>(&e);
+            if(acmeException && acmeException->getErrorType().compare("urn:ietf:params:acme:error:accountDoesNotExist") == 0)
+            {
+                return false;
+            }
+            
+            // Rethrow this exception
+            throw;
+        }
+        
         headerSuffix_ = u8R"(
                 "alg": "RS256",
                 "kid": ")" + header.second + "\"}";
+        
+        return true;
+    }
+    
+    bool haveAccount() const
+    {
+        return headerSuffix_.length() > 0;
     }
 
     string sign(const string& s)
@@ -531,6 +566,11 @@ struct AcmeClientImpl
     {
         initIfNeeded();
         
+        if(!haveAccount())
+        {
+            throw AcmeException("No account setup. You need to call setupAccount() before issuing a certificate");
+        }
+        
         if (domainNames.empty())
         {
             throw AcmeException("There must be at least one domain name in a certificate");
@@ -633,6 +673,7 @@ struct AcmeClientImpl
 private:
     string      headerSuffix_;
     EVP_PKEYptr privateKey_;
+    string      jwkValue_;
     string      jwkThumbprint_;
     
     string      directoryUrl_;
@@ -649,6 +690,11 @@ AcmeClient::AcmeClient(const string& accountPrivateKey, const std::string& direc
 }
 
 AcmeClient::~AcmeClient() = default;
+
+bool AcmeClient::setupAccount(bool allowCreateNew, bool termsOfServiceAgreed) 
+{
+    return impl_->setupAccount(allowCreateNew, termsOfServiceAgreed);
+}
 
 Certificate AcmeClient::issueCertificate(const std::list<std::string>& domainNames, Callback callback)
 {

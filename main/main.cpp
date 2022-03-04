@@ -32,6 +32,22 @@ void handleChallenge(const string& domain, const string& url, const string& keyA
     cout << "\n***\n";
 }
 
+bool askUserAcceptTOS(acme_lw::AcmeClient &acmeClient)
+{
+    cout << "You need to accept the Certificate Authority's Terms of Service. Read it at:" << endl
+         << "\t" << acmeClient.getTermsOfServiceUrl() << endl
+         << "Type Y to accept, or N to reject, and press ENTER." << endl;
+    char response = getchar();
+    if(response == 'y' || response == 'Y') 
+    {
+        return true;
+    } 
+    else 
+    {
+        return false;
+    }
+}
+
 }
 
 int main(int argc, char * argv[])
@@ -54,15 +70,28 @@ int main(int argc, char * argv[])
     {
         string accountPrivateKey = readFile(argv[1]);
         acme_lw::AcmeClient acmeClient(accountPrivateKey);
+        
+        if(!acmeClient.setupAccount(false, false))
+        {
+            if(askUserAcceptTOS(acmeClient))
+            {
+                cout << "Terms of service accepted. Creating account..." << endl;
+                acmeClient.setupAccount(true, true);
+            } 
+            else
+            {
+                cout << "Terms of service rejected. Exiting..." << endl;
+                exitStatus = 1;
+                return exitStatus;
+            }
+        }
 
         list<string> domainNames;
         for (int i = 2; i < argc; ++i)
         {
             domainNames.push_back(argv[i]);
         }
-		
-		printf("Terms of service URL: %s\n", acmeClient.getTermsOfServiceUrl().c_str());
-
+        
         acme_lw::Certificate certificate = acmeClient.issueCertificate(domainNames, handleChallenge);
 
         writeFile("fullchain.pem", certificate.fullchain);
@@ -76,7 +105,7 @@ int main(int argc, char * argv[])
         cout << "Failed with error: " << e.what() << "\n";
         exitStatus = 1;
     }
-
+    
     return exitStatus;
 }
 

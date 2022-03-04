@@ -6,6 +6,8 @@
 #include <list>
 #include <memory>
 
+#define STAGING
+
 namespace acme_lw
 {
 
@@ -52,8 +54,12 @@ public:
         @param signingKey the private key for the ACME account
         @param directoryURL the ACME server's directory URL. Defaults to LetsEncrypt
         if left blank  
+        
+        @throws AcmeException if something went wrong
     */
-    AcmeClient(const std::string& signingKey, const std::string& directoryURL = ""); // ##### FIXME! ##### Have AcmeAccount class?
+    AcmeClient(const std::string& signingKey, const std::string& directoryURL = ""); // ##### FIXME! ##### email address?
+    
+    // ##### FIXME! ##### need a constructor to use when EAB credentials are needed
 
     ~AcmeClient();
 
@@ -73,10 +79,29 @@ public:
     typedef void (*Callback) (  const std::string& domainName,
                                 const std::string& url,
                                 const std::string& keyAuthorization);
+    
+    /**
+        Sets up the ACME account. This either creates a new one, or retrieves an existing one.
+        
+        @param allowCreateNew set to true if you want to create a new account if there isn't 
+        an existing one
+        @param termsOfServiceAgreed must be set to true for account creation, or the server will
+        reject it. 
+        IMPORTANT: It's your responsibility to ask the user to agree to the certificate authority's
+        Terms Of Service (TOS). 
+        
+        @return bool true if successful, and false if allowCreateNew was false and no account
+        existed
+        
+        @throws AcmeException if something went wrong
+    */
+    bool setupAccount(bool allowCreateNew, bool termsOfServiceAgreed);
 
     /**
         Issue a certificate for the domainNames.
         The first one will be the 'Subject' (CN) in the certificate.
+        
+        IMPORTANT: You *MUST* call setupAcmeAccount first.
 
         throws std::exception, usually an instance of acme_lw::AcmeException
     */

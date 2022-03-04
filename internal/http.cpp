@@ -123,8 +123,9 @@ void doCurl(Ptr& curl, const string& url, const vector<char>& response)
     if (responseCode / 100 != 2)
     {
         // If it's not a 2xx response code, throw.
+        std::string responseString = string(&response.front(), response.size());
         throw AcmeException("Response code of "s + to_string(responseCode) + " contacting " + url + 
-                            " with response of:\n" + string(&response.front(), response.size()));
+                            " with response of:\n" + responseString, responseString);
     }
 }
 
