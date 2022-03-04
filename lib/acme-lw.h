@@ -6,7 +6,6 @@
 #include <list>
 #include <memory>
 
-#define STAGING
 
 namespace acme_lw
 {
