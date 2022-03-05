@@ -32,10 +32,10 @@ void handleChallenge(const string& domain, const string& url, const string& keyA
     cout << "\n***\n";
 }
 
-bool askUserAcceptTOS(acme_lw::AcmeClient &acmeClient)
+bool askUserAcceptTOS()
 {
     cout << "You need to accept the Certificate Authority's Terms of Service. Read it at:" << endl
-         << "\t" << acmeClient.getTermsOfServiceUrl() << endl
+         << "\t" << acme_lw::AcmeClient::getTermsOfServiceUrl() << endl
          << "Type Y to accept, or N to reject, and press ENTER." << endl;
     char response = getchar();
     if(response == 'y' || response == 'Y') 
@@ -65,46 +65,67 @@ int main(int argc, char * argv[])
     }
 
     int exitStatus = 0;
+    bool allowCreateNew = false;
 
     try
     {
+        // Should be called once per process before a use of AcmeClient.
+        acme_lw::AcmeClient::init();
+        
         string accountPrivateKey = readFile(argv[1]);
-        acme_lw::AcmeClient acmeClient(accountPrivateKey);
         
-        if(!acmeClient.setupAccount(false, false))
+        bool retry = false;
+        do
         {
-            if(askUserAcceptTOS(acmeClient))
+            try
             {
-                cout << "Terms of service accepted. Creating account..." << endl;
-                acmeClient.setupAccount(true, true);
-            } 
-            else
-            {
-                cout << "Terms of service rejected. Exiting..." << endl;
-                exitStatus = 1;
-                return exitStatus;
+                acme_lw::AcmeClient acmeClient(accountPrivateKey, allowCreateNew);
+
+                list<string> domainNames;
+                for (int i = 2; i < argc; ++i)
+                {
+                    domainNames.push_back(argv[i]);
+                }
+                
+                acme_lw::Certificate certificate = acmeClient.issueCertificate(domainNames, handleChallenge);
+
+                writeFile("fullchain.pem", certificate.fullchain);
+                writeFile("privkey.pem", certificate.privkey);
+
+                cout << "Files 'fullchain.pem' and 'privkey.pem' have been written to the current directory.\n";
+                cout << "Certificate expires on " << certificate.getExpiryDisplay() << "\n";
             }
-        }
-
-        list<string> domainNames;
-        for (int i = 2; i < argc; ++i)
-        {
-            domainNames.push_back(argv[i]);
-        }
-        
-        acme_lw::Certificate certificate = acmeClient.issueCertificate(domainNames, handleChallenge);
-
-        writeFile("fullchain.pem", certificate.fullchain);
-        writeFile("privkey.pem", certificate.privkey);
-
-        cout << "Files 'fullchain.pem' and 'privkey.pem' have been written to the current directory.\n";
-        cout << "Certificate expires on " << certificate.getExpiryDisplay() << "\n";
+            catch(const acme_lw::AcmeException &e)
+            {
+                if(e.getErrorType().compare("urn:ietf:params:acme:error:accountDoesNotExist") == 0)
+                {
+                    if(askUserAcceptTOS())
+                    {
+                        cout << "Terms of service accepted. Creating account..." << endl;
+                        allowCreateNew = true;
+                        retry = true;
+                    } 
+                    else
+                    {
+                        cout << "Terms of service rejected. Exiting..." << endl;
+                        exitStatus = 1;
+                    }
+                }
+                else 
+                {
+                    throw;
+                }
+            }
+        } while(retry);
     }
     catch (const exception& e)
     {
         cout << "Failed with error: " << e.what() << "\n";
         exitStatus = 1;
     }
+    
+    // Should be called to free resources allocated in AcmeClient::init
+    acme_lw::AcmeClient::teardown();
     
     return exitStatus;
 }

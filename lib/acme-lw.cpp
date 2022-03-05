@@ -35,10 +35,17 @@ namespace
 {
 
 #ifdef STAGING
-const char * directoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory";
+static const char * letsEncryptDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory";
 #else
-const char * directoryUrl = "https://acme-v02.api.letsencrypt.org/directory";
+static const char * letsEncryptDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory";
 #endif
+
+static string      directoryUrl;
+static string      newAccountUrl;
+static string      newOrderUrl;
+static string      newNonceUrl;
+
+static string      termsOfServiceUrl;
 
 // Smart pointers for OpenSSL types
 template<typename TYPE, void (*FREE)(TYPE *)>
@@ -358,14 +365,9 @@ namespace acme_lw
 
 struct AcmeClientImpl
 {
-    AcmeClientImpl(const string& accountPrivateKey, const std::string& directoryUrl)
-        : privateKey_(EVP_PKEY_new()), directoryUrl_(directoryUrl)
+    AcmeClientImpl(const string& accountPrivateKey, bool allowCreateNew)
+        : privateKey_(EVP_PKEY_new())
     {
-        if(!directoryUrl_.length()) {
-            // Use the default URL
-            directoryUrl_ = ::directoryUrl;
-        }
-        
         // Create the private key and 'header suffix', used to sign LE certs.
         BIOptr bio(BIO_new_mem_buf(accountPrivateKey.c_str(), -1));
         RSA * rsa(PEM_read_bio_RSAPrivateKey(*bio, nullptr, nullptr, nullptr));
@@ -380,8 +382,9 @@ struct AcmeClientImpl
             throw AcmeException("Unable to assign RSA to private key");
         }
 
-        jwkValue_ = privateKeyToJWKValue(rsa);
-        jwkThumbprint_ = makeJwkThumbprint(jwkValue_);
+        auto jwkValue = privateKeyToJWKValue(rsa);
+        jwkThumbprint_ = makeJwkThumbprint(jwkValue);
+        setupAccount(jwkValue, allowCreateNew, allowCreateNew);
     }
 
     string privateKeyToJWKValue(RSA *rsa)
@@ -397,13 +400,13 @@ struct AcmeClientImpl
                                 })";
     }
     
-    bool setupAccount(bool allowCreateNew, bool termsOfServiceAgreed) 
+    bool setupAccount(const std::string &jwkValue, bool allowCreateNew, bool termsOfServiceAgreed) 
     {
         // We use jwk for the first request, which allows us to get 
         // the account id. We use that thereafter.
         headerSuffix_ = u8R"(
                 "alg": "RS256",
-                "jwk": )" + jwkValue_ + "}";
+                "jwk": )" + jwkValue + "}";
 
         pair<string, string> header = make_pair("location"s, ""s);
         
@@ -414,37 +417,18 @@ struct AcmeClientImpl
         
         initIfNeeded();
         
-        try
-        {
-            sendRequest<string>(newAccountUrl_, u8R"(
-                                                {
-                                                    "termsOfServiceAgreed": )"s + tosAgreedStr + u8R"(,
-                                                    "onlyReturnExisting": )"s + onlyReturnExistingStr + u8R"(
-                                                }
-                                                )", &header);
-        }
-        catch(const std::exception &e)
-        {
-            const acme_lw::AcmeException *acmeException = dynamic_cast<const acme_lw::AcmeException*>(&e);
-            if(acmeException && acmeException->getErrorType().compare("urn:ietf:params:acme:error:accountDoesNotExist") == 0)
-            {
-                return false;
-            }
-            
-            // Rethrow this exception
-            throw;
-        }
+        sendRequest<string>(newAccountUrl, u8R"(
+                                            {
+                                                "termsOfServiceAgreed": )"s + tosAgreedStr + u8R"(,
+                                                "onlyReturnExisting": )"s + onlyReturnExistingStr + u8R"(
+                                            }
+                                            )", &header);
         
         headerSuffix_ = u8R"(
                 "alg": "RS256",
                 "kid": ")" + header.second + "\"}";
         
         return true;
-    }
-    
-    bool haveAccount() const
-    {
-        return headerSuffix_.length() > 0;
     }
 
     string sign(const string& s)
@@ -474,31 +458,19 @@ struct AcmeClientImpl
     
     void initIfNeeded()
     {
-        if(newAccountUrl_.length() > 0) {
+        if(newAccountUrl.length() > 0) {
             // Already initialized
             return;
         }
         
-        try
-        {
-            string directory = toT<string>(doGet(directoryUrl));
-            auto json = nlohmann::json::parse(directory);
-            newAccountUrl_ = json.at("newAccount");
-            newOrderUrl_ = json.at("newOrder");
-            newNonceUrl_ = json.at("newNonce");
-			termsOfServiceUrl_ = json["meta"].at("termsOfService");
-        }
-        catch (const exception& e)
-        {
-            throw AcmeException("Unable to initialize endpoints from "s + directoryUrl + ": " + e.what());
-        }
+        AcmeClient::init();
     }
 
     template<typename T>
     T sendRequest(const string& url, const string& payload, pair<string, string> * header = nullptr)
     {
         string protectd = u8R"({"nonce": ")"s +
-                                    getHeader(newNonceUrl_, "replay-nonce") + "\"," +
+                                    getHeader(newNonceUrl, "replay-nonce") + "\"," +
                                     u8R"("url": ")" + url + "\"," +
                                     headerSuffix_;
 
@@ -566,11 +538,6 @@ struct AcmeClientImpl
     {
         initIfNeeded();
         
-        if(!haveAccount())
-        {
-            throw AcmeException("No account setup. You need to call setupAccount() before issuing a certificate");
-        }
-        
         if (domainNames.empty())
         {
             throw AcmeException("There must be at least one domain name in a certificate");
@@ -607,7 +574,7 @@ struct AcmeClientImpl
         payload += "]}";
 
         pair<string, string> header = make_pair("location"s, ""s);
-        string response = sendRequest<string>(newOrderUrl_, payload, &header);
+        string response = sendRequest<string>(newOrderUrl, payload, &header);
         string currentOrderUrl = header.second;
 
         // Pass the challenges
@@ -664,37 +631,18 @@ struct AcmeClientImpl
         return cert;
     }
 
-    const std::string& getTermsOfServiceUrl()
-    {
-        initIfNeeded();
-        return termsOfServiceUrl_;
-    }
-
 private:
     string      headerSuffix_;
     EVP_PKEYptr privateKey_;
-    string      jwkValue_;
     string      jwkThumbprint_;
-    
-    string      directoryUrl_;
-    string      newAccountUrl_;
-    string      newOrderUrl_;
-    string      newNonceUrl_;
-    
-    string      termsOfServiceUrl_;
 };
 
-AcmeClient::AcmeClient(const string& accountPrivateKey, const std::string& directoryUrl)
-    : impl_(new AcmeClientImpl(accountPrivateKey, directoryUrl))
+AcmeClient::AcmeClient(const string& accountPrivateKey, bool allowCreateNew)
+    : impl_(new AcmeClientImpl(accountPrivateKey, allowCreateNew))
 {
 }
 
 AcmeClient::~AcmeClient() = default;
-
-bool AcmeClient::setupAccount(bool allowCreateNew, bool termsOfServiceAgreed) 
-{
-    return impl_->setupAccount(allowCreateNew, termsOfServiceAgreed);
-}
 
 Certificate AcmeClient::issueCertificate(const std::list<std::string>& domainNames, Callback callback)
 {
@@ -703,7 +651,36 @@ Certificate AcmeClient::issueCertificate(const std::list<std::string>& domainNam
 
 const std::string& AcmeClient::getTermsOfServiceUrl()
 {
-    return impl_->getTermsOfServiceUrl();
+    return termsOfServiceUrl;
+}
+
+void AcmeClient::init(const std::string& directoryUrl)
+{
+    
+    try
+    {
+        std::string url = directoryUrl;
+        if(!url.length())
+        {
+            url = letsEncryptDirectoryUrl;
+        }
+        
+        string directory = toT<string>(doGet(url));
+        auto json = nlohmann::json::parse(directory);
+        newAccountUrl = json.at("newAccount");
+        newOrderUrl = json.at("newOrder");
+        newNonceUrl = json.at("newNonce");
+        termsOfServiceUrl = json["meta"].at("termsOfService");
+    }
+    catch (const exception& e)
+    {
+        throw AcmeException("Unable to initialize endpoints from "s + directoryUrl + ": " + e.what());
+    }
+}
+
+void AcmeClient::teardown()
+{
+    
 }
 
 ::time_t Certificate::getExpiry() const

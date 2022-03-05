@@ -50,13 +50,18 @@ public:
         The signingKey is the Acme account private key used to sign
         requests to the acme CA, in pem format.
         
+        IMPORTANT: Creating a new account will automatically accept the certificate authority's
+        Terms-Of-Service (TOS). It is your responsibility to ask the user to read and accept prior
+        to account creation. The static function getTermsOfServiceUrl() can be used to get the TOS.
+        
         @param signingKey the private key for the ACME account
-        @param directoryURL the ACME server's directory URL. Defaults to LetsEncrypt
-        if left blank  
+        @param allowCreateNew set to true to allow creation of a new account on the server. If 
+        set to false, then it'll only retrieve an existing account, and will fail with an exception
+        of type "urn:ietf:params:acme:error:accountDoesNotExist" (use e.getErrorType() to check).
         
         @throws AcmeException if something went wrong
     */
-    AcmeClient(const std::string& signingKey, const std::string& directoryURL = ""); // ##### FIXME! ##### email address?
+    AcmeClient(const std::string& signingKey, bool allowCreateNew = true); // ##### FIXME! ##### email address?
     
     // ##### FIXME! ##### need a constructor to use when EAB credentials are needed
 
@@ -109,7 +114,21 @@ public:
     /**
         Gets the terms of service URL.
     */
-    const std::string& getTermsOfServiceUrl();
+    static const std::string& getTermsOfServiceUrl();
+    
+        /**
+        Call once before instantiating AcmeClient.
+        
+        Note that this calls Let's Encrypt servers and so can throw
+        if they're having issues.
+        
+        @param directoryUrl the ACME server's directory URL. Defaults to LetsEncrypt
+        if left blank  
+    */
+    static void init(const std::string& directoryUrl = "");
+
+    // Call once before application shutdown.
+    static void teardown();
 
 private:
     std::unique_ptr<AcmeClientImpl> impl_;
