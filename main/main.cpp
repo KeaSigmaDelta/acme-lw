@@ -1,6 +1,7 @@
 #include "acme-lw.h"
 
 #include <cerrno>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -58,11 +59,54 @@ int main(int argc, char * argv[])
 
     if (argc < 3)
     {
-        cout << "Usage is 'acme_lw_client <file-name>, <domain-name>, <domain-name>, ...'\n"
+        cout << "Usage is 'acme_lw_client [options] <file-name>, <domain-name>, <domain-name>, ...'\n"
                 << "  * <file-name> holds the account private key in pem format\n"
-                << "  * there must be at least one <domain-name>; the first will be the 'Subject' of the certificate\n";
+                << "  * there must be at least one <domain-name>; the first will be the 'Subject' of the certificate\n"
+                << "  * Options\n"
+                << "    -email <email> - provide a contact email address so you can be contacted about your domain/account\n"
+                << "    -eab_kid <kid> - optional External Account Binding (EAB) id (only needed with some providers)\n"
+                << "    -eab_hmac <hmac> - optional EAB hmac value\n"
+                << "    -zerossl - connect to ZeroSSL\n"
+                << "    -letsencrypt - connect to LetsEncrypt (the default)\n";
         return 0;
     }
+    
+    std::string email, eabKID, eabHMAC, acmeUrl;
+    
+    int fileNameArgIdx = 1;
+    for(int i = 1; i < argc; ++i) 
+    {
+        if(argv[i][0] != '-')
+        {
+            break;
+        }
+        if(strcmp(argv[i], "-email") == 0)
+        {
+            ++i;
+            email = argv[i];
+        } 
+        else if(strcmp(argv[i], "-eab_kid") == 0)
+        {
+            ++i;
+            eabKID = argv[i];
+        } 
+        else if(strcmp(argv[i], "-eab_hmac") == 0)
+        {
+            ++i;
+            eabHMAC = argv[i];
+        }
+        else if(strcmp(argv[i], "-zerossl") == 0)
+        {
+            cout << "Connecting to ZeroSSL" << endl;
+            acmeUrl = "https://acme.zerossl.com/v2/DV90";
+        }
+        else if(strcmp(argv[i], "-letsencrypt") == 0)
+        {
+            acmeUrl = "";
+        }
+        fileNameArgIdx = i + 1;
+    }
+    int domainArgIdx = fileNameArgIdx + 1;
 
     int exitStatus = 0;
     bool allowCreateNew = false;
@@ -70,19 +114,20 @@ int main(int argc, char * argv[])
     try
     {
         // Should be called once per process before a use of AcmeClient.
-        acme_lw::AcmeClient::init();
+        acme_lw::AcmeClient::init(acmeUrl);
         
-        string accountPrivateKey = readFile(argv[1]);
+        string accountPrivateKey = readFile(argv[fileNameArgIdx]);
         
         bool retry = false;
         do
         {
             try
             {
-                acme_lw::AcmeClient acmeClient(accountPrivateKey, allowCreateNew);
+                acme_lw::AcmeClient acmeClient(
+                    accountPrivateKey, allowCreateNew, email, eabKID, eabHMAC);
 
                 list<string> domainNames;
-                for (int i = 2; i < argc; ++i)
+                for (int i = domainArgIdx; i < argc; ++i)
                 {
                     domainNames.push_back(argv[i]);
                 }
