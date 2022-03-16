@@ -14,6 +14,7 @@
 #include "json.hpp"
 
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 #include <openssl/x509v3.h>
@@ -100,6 +101,11 @@ struct Ptr
     {
         ptr_ = nullptr;
     }
+    
+    TYPE* get()
+    {
+        return ptr_;
+    }
 
 private:
     TYPE * ptr_;
@@ -119,6 +125,8 @@ void freeStackOfExtensions(STACK_OF(X509_EXTENSION) * e)
 }
 
 typedef Ptr<STACK_OF(X509_EXTENSION), freeStackOfExtensions>    X509_EXTENSIONSptr;
+
+
 
 template<typename T>
 T toT(const vector<char>& v)
@@ -224,6 +232,129 @@ string urlSafeBase64Encode(const BIGNUM * bn)
     BN_bn2bin(bn, &buffer.front());
 
     return urlSafeBase64Encode(buffer);
+}
+
+ std::string base64Decode(const std::string& t)
+{
+    if (!t.size()) {
+        return "";
+    }
+    // Use openssl to do this since we're already linking to it.
+
+    // Don't need (or want) a BIOptr since BIO_push chains it to b64
+    BIO * bio(BIO_new_mem_buf(&t.front(), t.size()));
+    BIOptr b64(BIO_new(BIO_f_base64()));
+
+    // OpenSSL inserts new lines by default to make it look like PEM format.
+    // Turn that off.
+    BIO_set_flags(b64.get(), BIO_FLAGS_BASE64_NO_NL);
+
+    BIO_push(b64.get(), bio);
+    std::string output(t.size(), 0);
+    auto read = BIO_read(b64.get(), &output.front(), output.size());
+    if(read <= 0) {
+        throw acme_lw::AcmeException("Failure in base64Decode, BIO_read returned " + std::to_string(read) + '\n'
+            + "input: " + t + '\n'
+            + "output: " + output + '\n');
+    }
+    output.resize(read);
+
+    return output;
+}
+
+std::string urlSafeBase64Decode(std::string s)
+{
+    // We get url safe base64 encoding and openssl requires regular
+    // base64, so we convert.
+
+    for(auto&& ch : s)
+    {
+        if (ch == '-')
+        {
+            ch = '+';
+        }
+        else if (ch == '_')
+        {
+            ch = '/';
+        }
+    }
+
+    const std::size_t fullChunkSize = 4;
+    auto trailing = s.size() % fullChunkSize;
+    auto lastChunkSize = 0 != trailing ? trailing : fullChunkSize;
+    auto padding = fullChunkSize - lastChunkSize;
+    s += std::string(padding,'=');
+
+    return base64Decode(s);
+}
+
+template <typename Range, typename ToString>
+std::string join(const Range& rng, const std::string& seperator, ToString toStr) {
+    return std::accumulate(rng.begin(), rng.end(), std::string(), [&toStr, &seperator]
+    (const auto& all, const auto& one) {
+        auto str = toStr(one);
+        return all.empty() ? str : all + seperator + str;
+    });
+}
+
+template <typename Range>
+std::string join(const Range& rng, const std::string& seperator) {
+    return join(rng, seperator, [](auto&& x)
+        -> std::string { return std::forward<decltype(x)>(x); });
+}
+
+struct hmacAlg {
+    std::string name;
+    const EVP_MD* evp_md;
+};
+
+hmacAlg getHmacAlg(const std::string& key)
+{
+    struct keySizeAlgPair {
+        std::size_t keySize;
+        hmacAlg alg;
+    };
+
+    const std::array<keySizeAlgPair,3> map {{
+        {32, {"HS256", EVP_sha256()}},
+        {64, {"HS512", EVP_sha512()}},
+        {48, {"HS384", EVP_sha384()}}
+    }};
+
+    auto found = std::find_if(map.begin(), map.end(),
+        [keySize = key.size()] (auto pair) { return keySize == pair.keySize; });
+
+    if(found == map.end()) {
+        auto expected = join(map, ", ", [](const auto& pair) {
+            return "size " + std::to_string(pair.keySize) + " for " + pair.alg.name;
+        });
+        throw acme_lw::AcmeException("Unexpected HMAC key size: " + std::to_string(key.size()) + '\n'
+            + "key: " + urlSafeBase64Encode(key) + '\n'
+            + "expected: " + expected + '\n'
+        );
+    }
+
+    return found->alg;
+}
+
+std::string hmacSha(const std::string& key, const std::string& data)
+{
+    auto alg = getHmacAlg(key);
+    std::string output(EVP_MAX_MD_SIZE, 0);
+    unsigned int output_size = output.size();
+    if (! HMAC(alg.evp_md, key.data(), key.size(),
+        reinterpret_cast<const unsigned char*>(data.data()), data.size(),
+        reinterpret_cast<unsigned char*>(&output.front()), &output_size)
+       )
+    {
+        throw acme_lw::AcmeException("Failed to generate HMAC signature\n"s
+            + "key: " + urlSafeBase64Encode(key) + '\n'
+            + "data: " + data + '\n'
+            + "alg: " + alg.name
+        );
+    }
+    output.resize(output_size);
+    return output;
 }
 
 // returns pair<CSR, privateKey>
@@ -365,7 +496,8 @@ namespace acme_lw
 
 struct AcmeClientImpl
 {
-    AcmeClientImpl(const string& accountPrivateKey, bool allowCreateNew, const std::string &email)
+    AcmeClientImpl(const string& accountPrivateKey, bool allowCreateNew, const std::string &email,
+        const std::string &eabKID, const std::string &eabHMAC)
         : privateKey_(EVP_PKEY_new())
     {
         // Create the private key and 'header suffix', used to sign LE certs.
@@ -384,7 +516,7 @@ struct AcmeClientImpl
 
         auto jwkValue = privateKeyToJWKValue(rsa);
         jwkThumbprint_ = makeJwkThumbprint(jwkValue);
-        setupAccount(jwkValue, email, allowCreateNew, allowCreateNew);
+        setupAccount(jwkValue, email, eabKID, urlSafeBase64Decode(eabHMAC), allowCreateNew, allowCreateNew);
     }
 
     string privateKeyToJWKValue(RSA *rsa)
@@ -400,7 +532,8 @@ struct AcmeClientImpl
                                 })";
     }
     
-    bool setupAccount(const std::string &jwkValue, const std::string &email, bool allowCreateNew, bool termsOfServiceAgreed) 
+    bool setupAccount(const std::string &jwkValue, const std::string &email, const std::string &eabKID, const std::string &eabHMAC, 
+        bool allowCreateNew, bool termsOfServiceAgreed) 
     {
         // We use jwk for the first request, which allows us to get 
         // the account id. We use that thereafter.
@@ -410,32 +543,58 @@ struct AcmeClientImpl
 
         pair<string, string> header = make_pair("location"s, ""s);
         
-        const string trueStr = u8"true";
-        const string falseStr = u8"false";
-        string tosAgreedStr = termsOfServiceAgreed ? trueStr : falseStr;
-        string onlyReturnExistingStr = !allowCreateNew ? trueStr : falseStr;
-        
         initIfNeeded();
         
-        std::string emailStr;
+        nlohmann::json requestJSON = nlohmann::json({
+            {"termsOfServiceAgreed", termsOfServiceAgreed},
+            {"onlyReturnExisting", !allowCreateNew}
+        });
+        
+        
         if(email.length() > 0) {
-            emailStr = u8R"(,
-                    "contact":["mailto:)" + email + u8R"("])";
+            std::string emailStr = "mailto:" + email;
+            requestJSON["contact"] = nlohmann::json({emailStr});
         }
         
-        sendRequest<string>(newAccountUrl, u8R"(
-                                            {
-                                                "termsOfServiceAgreed": )"s + tosAgreedStr + u8R"(,
-                                                "onlyReturnExisting": )"s + onlyReturnExistingStr + 
-                                                emailStr + u8R"(
-                                            }
-                                            )", &header);
+        if(eabKID.length() > 0) {
+            requestJSON["externalAccountBinding"] = genEABJSON(eabKID, eabHMAC, jwkValue);
+        }
+        
+        sendRequest<string>(newAccountUrl, requestJSON.dump(), &header);
         
         headerSuffix_ = u8R"(
                 "alg": "RS256",
                 "kid": ")" + header.second + "\"}";
         
         return true;
+    }
+    
+    /**
+        Generate the External Account Binding (EAB) json code.
+     */
+    nlohmann::json genEABJSON(const std::string &eabKID, const std::string &eabHMAC, const std::string &jwkValue) 
+    {
+        try {
+            // NOTE: alg and signature below can be inlined if https://github.com/nlohmann/json/issues/3215 is fixed
+            auto alg = getHmacAlg(eabHMAC);
+            std::string eabProtected = urlSafeBase64Encode(nlohmann::json({
+                {"alg", alg.name},
+                {"kid", eabKID},
+                {"url", newAccountUrl}
+            }).dump());
+            std::string eabPayload = urlSafeBase64Encode(jwkValue);
+            std::string signature = urlSafeBase64Encode(hmacSha(eabHMAC, eabProtected + "." + eabPayload));
+            auto eabJSON = nlohmann::json({
+                "externalAccountBinding", {
+                    {"signature", std::move(signature) },
+                    {"protected", std::move(eabProtected)},
+                    {"payload", std::move(eabPayload)}
+            }});
+            
+            return eabJSON;
+        } catch (const AcmeException& e) {
+            throw AcmeException("EAB payload error: "s + e.what());
+        }
     }
 
     string sign(const string& s)
@@ -644,8 +803,9 @@ private:
     string      jwkThumbprint_;
 };
 
-AcmeClient::AcmeClient(const string& accountPrivateKey, bool allowCreateNew, const std::string &email)
-    : impl_(new AcmeClientImpl(accountPrivateKey, allowCreateNew, email))
+AcmeClient::AcmeClient(const string& accountPrivateKey, bool allowCreateNew, const std::string &email,
+        const std::string &eabKID, const std::string &eabHMAC)
+    : impl_(new AcmeClientImpl(accountPrivateKey, allowCreateNew, email, eabKID, eabHMAC))
 {
 }
 

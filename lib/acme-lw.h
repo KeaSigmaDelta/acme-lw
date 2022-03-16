@@ -60,10 +60,13 @@ public:
         of type "urn:ietf:params:acme:error:accountDoesNotExist" (use e.getErrorType() to check)
         @param email optional contact email address (allows CA to contact you about your account/domains
         if needed)
+        @param eabKID external account binding KID. Only needed with CAs that have an account to bind to
+        @param eabHMAC external account binding HMAC. Only needed with CAs that have an account to bind to
         
         @throws AcmeException if something went wrong
     */
-    AcmeClient(const std::string& signingKey, bool allowCreateNew = true, const std::string &email = "");
+    AcmeClient(const std::string& signingKey, bool allowCreateNew = true, const std::string &email = "",
+        const std::string &eabKID = "", const std::string &eabHMAC = "");
     
     // ##### FIXME! ##### need a constructor to use when EAB credentials are needed
 
