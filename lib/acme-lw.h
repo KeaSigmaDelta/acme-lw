@@ -57,11 +57,13 @@ public:
         @param signingKey the private key for the ACME account
         @param allowCreateNew set to true to allow creation of a new account on the server. If 
         set to false, then it'll only retrieve an existing account, and will fail with an exception
-        of type "urn:ietf:params:acme:error:accountDoesNotExist" (use e.getErrorType() to check).
+        of type "urn:ietf:params:acme:error:accountDoesNotExist" (use e.getErrorType() to check)
+        @param email optional contact email address (allows CA to contact you about your account/domains
+        if needed)
         
         @throws AcmeException if something went wrong
     */
-    AcmeClient(const std::string& signingKey, bool allowCreateNew = true); // ##### FIXME! ##### email address?
+    AcmeClient(const std::string& signingKey, bool allowCreateNew = true, const std::string &email = "");
     
     // ##### FIXME! ##### need a constructor to use when EAB credentials are needed
 

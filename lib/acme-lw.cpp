@@ -365,7 +365,7 @@ namespace acme_lw
 
 struct AcmeClientImpl
 {
-    AcmeClientImpl(const string& accountPrivateKey, bool allowCreateNew)
+    AcmeClientImpl(const string& accountPrivateKey, bool allowCreateNew, const std::string &email)
         : privateKey_(EVP_PKEY_new())
     {
         // Create the private key and 'header suffix', used to sign LE certs.
@@ -384,7 +384,7 @@ struct AcmeClientImpl
 
         auto jwkValue = privateKeyToJWKValue(rsa);
         jwkThumbprint_ = makeJwkThumbprint(jwkValue);
-        setupAccount(jwkValue, allowCreateNew, allowCreateNew);
+        setupAccount(jwkValue, email, allowCreateNew, allowCreateNew);
     }
 
     string privateKeyToJWKValue(RSA *rsa)
@@ -400,7 +400,7 @@ struct AcmeClientImpl
                                 })";
     }
     
-    bool setupAccount(const std::string &jwkValue, bool allowCreateNew, bool termsOfServiceAgreed) 
+    bool setupAccount(const std::string &jwkValue, const std::string &email, bool allowCreateNew, bool termsOfServiceAgreed) 
     {
         // We use jwk for the first request, which allows us to get 
         // the account id. We use that thereafter.
@@ -417,10 +417,17 @@ struct AcmeClientImpl
         
         initIfNeeded();
         
+        std::string emailStr;
+        if(email.length() > 0) {
+            emailStr = u8R"(,
+                    "contact":["mailto:)" + email + u8R"("])";
+        }
+        
         sendRequest<string>(newAccountUrl, u8R"(
                                             {
                                                 "termsOfServiceAgreed": )"s + tosAgreedStr + u8R"(,
-                                                "onlyReturnExisting": )"s + onlyReturnExistingStr + u8R"(
+                                                "onlyReturnExisting": )"s + onlyReturnExistingStr + 
+                                                emailStr + u8R"(
                                             }
                                             )", &header);
         
@@ -637,8 +644,8 @@ private:
     string      jwkThumbprint_;
 };
 
-AcmeClient::AcmeClient(const string& accountPrivateKey, bool allowCreateNew)
-    : impl_(new AcmeClientImpl(accountPrivateKey, allowCreateNew))
+AcmeClient::AcmeClient(const string& accountPrivateKey, bool allowCreateNew, const std::string &email)
+    : impl_(new AcmeClientImpl(accountPrivateKey, allowCreateNew, email))
 {
 }
 
