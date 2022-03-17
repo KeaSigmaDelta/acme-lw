@@ -525,10 +525,10 @@ struct AcmeClientImpl
         RSA_get0_key(rsa, &n, &e, &d);
 
         // Note json keys must be in lexographical order.
-        return u8R"( {
-                                    "e":")"s + urlSafeBase64Encode(e) + u8R"(",
+        return R"( {
+                                    "e":")"s + urlSafeBase64Encode(e) + R"(",
                                     "kty": "RSA",
-                                    "n":")"s + urlSafeBase64Encode(n) + u8R"("
+                                    "n":")"s + urlSafeBase64Encode(n) + R"("
                                 })";
     }
     
@@ -537,7 +537,7 @@ struct AcmeClientImpl
     {
         // We use jwk for the first request, which allows us to get 
         // the account id. We use that thereafter.
-        headerSuffix_ = u8R"(
+        headerSuffix_ = R"(
                 "alg": "RS256",
                 "jwk": )" + jwkValue + "}";
 
@@ -562,7 +562,7 @@ struct AcmeClientImpl
         
         sendRequest<string>(newAccountUrl, requestJSON.dump(), &header);
         
-        headerSuffix_ = u8R"(
+        headerSuffix_ = R"(
                 "alg": "RS256",
                 "kid": ")" + header.second + "\"}";
         
@@ -638,8 +638,8 @@ struct AcmeClientImpl
         string nonce = nextNonce_.length() > 0 ? nextNonce_ :  getHeader(newNonceUrl, "replay-nonce");
         nextNonce_ = ""; // Must only be used once
         
-        string protectd = u8R"({"nonce": ")"s + nonce + "\"," +
-                                    u8R"("url": ")" + url + "\"," +
+        string protectd = R"({"nonce": ")"s + nonce + "\"," +
+                                    R"("url": ")" + url + "\"," +
                                     headerSuffix_;
 
         protectd = urlSafeBase64Encode(protectd);
@@ -648,9 +648,9 @@ struct AcmeClientImpl
         string signature = sign(protectd + "." + payld);
 
         string body = "{"s +
-                        u8R"("protected": ")" + protectd + "\"," +
-                        u8R"("payload": ")" + payld + "\"," +
-                        u8R"("signature": ")" + signature + "\"}";
+                        R"("protected": ")" + protectd + "\"," +
+                        R"("payload": ")" + payld + "\"," +
+                        R"("signature": ")" + signature + "\"}";
 
         Response response = doPost(url, body, header ? header-> first.c_str() : nullptr);
         
@@ -713,7 +713,7 @@ struct AcmeClientImpl
         }
 
         // Create the order        
-        string payload = u8R"({"identifiers": [)";
+        string payload = R"({"identifiers": [)";
         bool first = true;
         for (const string& domain : domainNames)
         {
@@ -733,10 +733,10 @@ struct AcmeClientImpl
             }
             first = false;
 
-            payload += u8R"(
+            payload += R"(
                             {
                                 "type": "dns",
-                                "value": ")"s + domain + u8R"("
+                                "value": ")"s + domain + R"("
                             }
                            )";
         }
@@ -786,8 +786,8 @@ struct AcmeClientImpl
         string csr = r.first;
         string privateKey = r.second;
         string certificateUrl = nlohmann::json::parse(sendRequest<vector<char>>(json.at("finalize"),
-                                                u8R"(   {
-                                                            "csr": ")"s + csr + u8R"("
+                                                R"(   {
+                                                            "csr": ")"s + csr + R"("
                                                         })")).at("certificate");
 
         // Wait for the certificate to be produced
