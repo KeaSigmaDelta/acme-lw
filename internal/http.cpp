@@ -4,7 +4,9 @@
 
 #include <curl/curl.h>
 
+#include <algorithm>
 #include <cstring>
+#include <unordered_map>
 
 using namespace std;
 
@@ -58,30 +60,31 @@ private:
     CURL * curl_;
 };
 
+std::string toLowercase(const std::string &str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(),
+        [](unsigned char c){ return std::tolower(c); });
+    return result;
+}
+
 size_t headerCallback(void * buffer, size_t size, size_t nmemb, void * h)
 {
     // header -> 'key': 'value'
-    pair<string, string>& header = *reinterpret_cast<pair<string, string> *>(h);
+    unordered_map<string, string>& headers = *reinterpret_cast<unordered_map<string, string> *>(h);
 
     size_t byteCount = size * nmemb;
-    if (byteCount >= header.first.size())
+    string line(reinterpret_cast<const char *>(buffer), byteCount);
+
+    // Header looks like 'X: Y'. This gets the 'Y'
+    auto pos = line.find(": ");
+    if (pos != string::npos)
     {
-        // Header names are case insensitive per RFC 7230. Let's Encrypt's move
-        // to a CDN made the headers lower case.
-        if (!strncasecmp(header.first.c_str(), reinterpret_cast<const char *>(buffer), header.first.size()))
-        {
-            string line(reinterpret_cast<const char *>(buffer), byteCount);
+        // Headers are case insensitive, so we convert everything to lowercase for easy lookup
+        string name = toLowercase(line.substr(0,pos));
+        string value = line.substr(pos + 2, byteCount - pos - 2);
 
-            // Header looks like 'X: Y'. This gets the 'Y'
-            auto pos = line.find(": ");
-            if (pos != string::npos)
-            {
-                string value = line.substr(pos + 2, byteCount - pos - 2);
-
-                // Trim trailing whitespace
-                header.second = value.erase(value.find_last_not_of(" \n\r") + 1);
-            }
-        }
+        // Trim trailing whitespace
+        headers.emplace(name, value.erase(value.find_last_not_of(" \n\r") + 1));
     }
 
     return byteCount;
@@ -139,15 +142,15 @@ string getHeader(const string& url, const string& headerKey)
 
     curl_easy_setopt(*curl, CURLOPT_HEADERFUNCTION, &headerCallback);
 
-    pair<string, string> header = make_pair(headerKey, ""s);
-    curl_easy_setopt(*curl, CURLOPT_HEADERDATA, &header);
+    unordered_map<string, string> headers;
+    curl_easy_setopt(*curl, CURLOPT_HEADERDATA, &headers);
 
     // There will be no response (probably). We just pass this
     // for error handling
     vector<char> response;
     doCurl(curl, url, response);
-
-    return header.second;
+    
+    return headers[toLowercase(headerKey)];
 }
 
 Response doPost(const string& url, const string& postBody, const char * headerKey)
@@ -165,19 +168,22 @@ Response doPost(const string& url, const string& postBody, const char * headerKe
     curl_slist h = { const_cast<char *>("Content-Type: application/jose+json"), nullptr };
     curl_easy_setopt(*curl, CURLOPT_HTTPHEADER, &h);
 
-    pair<string, string> header;
+    unordered_map<string, string> headers;
     if (headerKey)
     {
         curl_easy_setopt(*curl, CURLOPT_HEADERFUNCTION, &headerCallback);
 
-        header = make_pair(headerKey, ""s);
-        curl_easy_setopt(*curl, CURLOPT_HEADERDATA, &header);
+        curl_easy_setopt(*curl, CURLOPT_HEADERDATA, &headers);
     }
 
     doCurl(curl, url, response.response_);
-
-    response.headerValue_ = header.second;
-
+    
+    if(headerKey) 
+    {
+        response.headerValue_ = headers[toLowercase(headerKey)];
+    }
+    response.replayNonce_ = headers["replay-nonce"];
+    
     return response;
 }
 

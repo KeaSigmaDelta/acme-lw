@@ -13,6 +13,7 @@ struct Response
 {
     std::vector<char>   response_;
     std::string         headerValue_;
+    std::string         replayNonce_;
 };
 
 Response doPost(const std::string& url, const std::string& postBody, const char * headerKey = nullptr);

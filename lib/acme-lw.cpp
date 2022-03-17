@@ -635,8 +635,10 @@ struct AcmeClientImpl
     template<typename T>
     T sendRequest(const string& url, const string& payload, pair<string, string> * header = nullptr)
     {
-        string protectd = u8R"({"nonce": ")"s +
-                                    getHeader(newNonceUrl, "replay-nonce") + "\"," +
+        string nonce = nextNonce_.length() > 0 ? nextNonce_ :  getHeader(newNonceUrl, "replay-nonce");
+        nextNonce_ = ""; // Must only be used once
+        
+        string protectd = u8R"({"nonce": ")"s + nonce + "\"," +
                                     u8R"("url": ")" + url + "\"," +
                                     headerSuffix_;
 
@@ -651,7 +653,8 @@ struct AcmeClientImpl
                         u8R"("signature": ")" + signature + "\"}";
 
         Response response = doPost(url, body, header ? header-> first.c_str() : nullptr);
-
+        
+        nextNonce_ = response.replayNonce_;
         if (header)
         {
             header->second = response.headerValue_;
@@ -801,6 +804,7 @@ private:
     string      headerSuffix_;
     EVP_PKEYptr privateKey_;
     string      jwkThumbprint_;
+    string      nextNonce_;
 };
 
 AcmeClient::AcmeClient(const string& accountPrivateKey, bool allowCreateNew, const std::string &email,
