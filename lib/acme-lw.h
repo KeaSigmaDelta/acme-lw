@@ -47,28 +47,14 @@ class AcmeClient
 {
 public:
     /**
-        The signingKey is the Acme account private key used to sign
-        requests to the acme CA, in pem format.
-        
-        IMPORTANT: Creating a new account will automatically accept the certificate authority's
-        Terms-Of-Service (TOS). It is your responsibility to ask the user to read and accept prior
-        to account creation. The static function getTermsOfServiceUrl() can be used to get the TOS.
-        
-        @param signingKey the private key for the ACME account
-        @param allowCreateNew set to true to allow creation of a new account on the server. If 
-        set to false, then it'll only retrieve an existing account, and will fail with an exception
-        of type "urn:ietf:params:acme:error:accountDoesNotExist" (use e.getErrorType() to check)
-        @param email optional contact email address (allows CA to contact you about your account/domains
-        if needed)
-        @param eabKID external account binding KID. Only needed with CAs that have an account to bind to
-        @param eabHMAC external account binding HMAC. Only needed with CAs that have an account to bind to
+        Creates a new AcmeClient that connects to the ACME server identified by directoryUrl.
+
+        @param directoryUrl the Certificate Authority's (CA's) ACME server directory URL. Defaults to 
+        LetsEncrypt if empty
         
         @throws AcmeException if something went wrong
     */
-    AcmeClient(const std::string& signingKey, bool allowCreateNew = true, const std::string &email = "",
-        const std::string &eabKID = "", const std::string &eabHMAC = "");
-    
-    // ##### FIXME! ##### need a constructor to use when EAB credentials are needed
+    AcmeClient(const std::string &directoryUrl);
 
     ~AcmeClient();
 
@@ -85,32 +71,38 @@ public:
         Let's Encrypt already believes the caller has control
         of the domain name.
     */
-    typedef void (*Callback) (  const std::string& domainName,
-                                const std::string& url,
-                                const std::string& keyAuthorization);
+    typedef std::function<void(const std::string& domainName,
+        const std::string& url, const std::string& keyAuthorization)> Callback;
     
     /**
-        Sets up the ACME account. This either creates a new one, or retrieves an existing one.
+        Setup an ACME account. This must be called before issueCertificate.
+
+        The accountPrivateKey is the Acme account private key used to sign
+        requests to the acme CA, in pem format.
+
+        IMPORTANT: Creating a new account will automatically accept the certificate authority's
+        Terms-Of-Service (TOS). It is your responsibility to ask the user to read and accept prior
+        to account creation. The static function getTermsOfServiceUrl() can be used to get the TOS.
         
-        @param allowCreateNew set to true if you want to create a new account if there isn't 
-        an existing one
-        @param termsOfServiceAgreed must be set to true for account creation, or the server will
-        reject it. 
-        IMPORTANT: It's your responsibility to ask the user to agree to the certificate authority's
-        Terms Of Service (TOS). 
-        
-        @return bool true if successful, and false if allowCreateNew was false and no account
-        existed
-        
-        @throws AcmeException if something went wrong
+        @param accountPrivateKey the private key for the ACME account
+        @param allowCreateNew set to true to allow creation of a new account on the server. If 
+        set to false, then it'll only retrieve an existing account, and will fail with an exception
+        of type "urn:ietf:params:acme:error:accountDoesNotExist" (use e.getErrorType() to check)
+        @param email optional contact email address (allows CA to contact you about your account/domains
+        if needed)
+        @param eabKID external account binding KID. Only needed with CAs that have an account to bind to
+        @param eabHMAC external account binding HMAC. Only needed with CAs that have an account to bind to
+
+        throws std::exception, usually an instance of acme_lw::AcmeException
     */
-    bool setupAccount(bool allowCreateNew, bool termsOfServiceAgreed);
+    void setupAccount(const std::string& accountPrivateKey, bool allowCreateNew, const std::string &email = "",
+        const std::string &eabKID = "", const std::string &eabHMAC = "");
 
     /**
         Issue a certificate for the domainNames.
         The first one will be the 'Subject' (CN) in the certificate.
         
-        IMPORTANT: You *MUST* call setupAcmeAccount first.
+        IMPORTANT: You *MUST* call setupAccount() first.
 
         throws std::exception, usually an instance of acme_lw::AcmeException
     */
@@ -119,21 +111,7 @@ public:
     /**
         Gets the terms of service URL.
     */
-    static const std::string& getTermsOfServiceUrl();
-    
-        /**
-        Call once before instantiating AcmeClient.
-        
-        Note that this calls Let's Encrypt servers and so can throw
-        if they're having issues.
-        
-        @param directoryUrl the ACME server's directory URL. Defaults to LetsEncrypt
-        if left blank  
-    */
-    static void init(const std::string& directoryUrl = "");
-
-    // Call once before application shutdown.
-    static void teardown();
+    const std::string& getTermsOfServiceUrl() const;
 
 private:
     std::unique_ptr<AcmeClientImpl> impl_;
