@@ -3,6 +3,7 @@
 #include "acme-exception.h"
 
 #include <ctime>
+#include <functional>
 #include <list>
 #include <memory>
 
@@ -72,7 +73,7 @@ public:
         of the domain name.
     */
     typedef std::function<void(const std::string& domainName,
-        const std::string& url, const std::string& keyAuthorization)> Callback;
+		const std::string& url, const std::string& keyAuthorization)> Callback;
     
     /**
         Setup an ACME account. This must be called before issueCertificate.

@@ -50,6 +50,12 @@ SOFTWARE.
 
 // #include <nlohmann/adl_serializer.hpp>
 
+#ifdef __amigaos4__
+namespace std {
+    typedef basic_string<wchar_t> wstring;
+}
+#endif
+
 
 #include <utility>
 

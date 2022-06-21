@@ -41,13 +41,6 @@ static const char * letsEncryptDirectoryUrl = "https://acme-staging-v02.api.lets
 static const char * letsEncryptDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory";
 #endif
 
-static string      directoryUrl;
-static string      newAccountUrl;
-static string      newOrderUrl;
-static string      newNonceUrl;
-
-static string      termsOfServiceUrl;
-
 // Smart pointers for OpenSSL types
 template<typename TYPE, void (*FREE)(TYPE *)>
 struct Ptr
@@ -496,9 +489,46 @@ namespace acme_lw
 
 struct AcmeClientImpl
 {
-    AcmeClientImpl(const string& accountPrivateKey, bool allowCreateNew, const std::string &email,
-        const std::string &eabKID, const std::string &eabHMAC)
+    AcmeClientImpl(const std::string &directoryUrl)
         : privateKey_(EVP_PKEY_new())
+    {
+        try
+        {
+            std::string url = directoryUrl;
+            if(!url.length())
+            {
+                url = letsEncryptDirectoryUrl;
+            }
+        
+            string directory = toT<string>(doGet(url));
+            auto json = nlohmann::json::parse(directory);
+            newAccountUrl_ = json.at("newAccount");
+            newOrderUrl_ = json.at("newOrder");
+            newNonceUrl_ = json.at("newNonce");
+            termsOfServiceUrl_ = json["meta"].at("termsOfService");
+        }
+        catch (const exception& e)
+        {
+            throw AcmeException("Unable to initialize endpoints from "s + directoryUrl + ": " + e.what());
+        }
+
+    }
+
+    string privateKeyToJWKValue(RSA *rsa)
+    {
+        const BIGNUM *n, *e, *d;
+        RSA_get0_key(rsa, &n, &e, &d);
+
+        // Note json keys must be in lexographical order.
+        return R"( {
+                                    "e":")"s + urlSafeBase64Encode(e) + R"(",
+                                    "kty": "RSA",
+                                    "n":")"s + urlSafeBase64Encode(n) + R"("
+                                })";
+    }
+    
+    bool setupAccount(const string& accountPrivateKey, bool allowCreateNew, const std::string &email,
+        const std::string &eabKID, const std::string &eabHMAC)
     {
         // Create the private key and 'header suffix', used to sign LE certs.
         BIOptr bio(BIO_new_mem_buf(accountPrivateKey.c_str(), -1));
@@ -516,25 +546,7 @@ struct AcmeClientImpl
 
         auto jwkValue = privateKeyToJWKValue(rsa);
         jwkThumbprint_ = makeJwkThumbprint(jwkValue);
-        setupAccount(jwkValue, email, eabKID, urlSafeBase64Decode(eabHMAC), allowCreateNew, allowCreateNew);
-    }
-
-    string privateKeyToJWKValue(RSA *rsa)
-    {
-        const BIGNUM *n, *e, *d;
-        RSA_get0_key(rsa, &n, &e, &d);
-
-        // Note json keys must be in lexographical order.
-        return R"( {
-                                    "e":")"s + urlSafeBase64Encode(e) + R"(",
-                                    "kty": "RSA",
-                                    "n":")"s + urlSafeBase64Encode(n) + R"("
-                                })";
-    }
-    
-    bool setupAccount(const std::string &jwkValue, const std::string &email, const std::string &eabKID, const std::string &eabHMAC, 
-        bool allowCreateNew, bool termsOfServiceAgreed) 
-    {
+        
         // We use jwk for the first request, which allows us to get 
         // the account id. We use that thereafter.
         headerSuffix_ = R"(
@@ -543,10 +555,8 @@ struct AcmeClientImpl
 
         pair<string, string> header = make_pair("location"s, ""s);
         
-        initIfNeeded();
-        
         nlohmann::json requestJSON = nlohmann::json({
-            {"termsOfServiceAgreed", termsOfServiceAgreed},
+            {"termsOfServiceAgreed", allowCreateNew},
             {"onlyReturnExisting", !allowCreateNew}
         });
         
@@ -557,16 +567,20 @@ struct AcmeClientImpl
         }
         
         if(eabKID.length() > 0) {
-            requestJSON["externalAccountBinding"] = genEABJSON(eabKID, eabHMAC, jwkValue);
+            requestJSON["externalAccountBinding"] = genEABJSON(eabKID, urlSafeBase64Decode(eabHMAC), jwkValue);
         }
         
-        sendRequest<string>(newAccountUrl, requestJSON.dump(), &header);
+        sendRequest<string>(newAccountUrl_, requestJSON.dump(), &header);
         
         headerSuffix_ = R"(
                 "alg": "RS256",
                 "kid": ")" + header.second + "\"}";
         
         return true;
+    }
+
+    bool accountIsSetup() {
+        return jwkThumbprint_.length() > 0;
     }
     
     /**
@@ -580,7 +594,7 @@ struct AcmeClientImpl
             std::string eabProtected = urlSafeBase64Encode(nlohmann::json({
                 {"alg", alg.name},
                 {"kid", eabKID},
-                {"url", newAccountUrl}
+                {"url", newAccountUrl_}
             }).dump());
             std::string eabPayload = urlSafeBase64Encode(jwkValue);
             std::string signature = urlSafeBase64Encode(hmacSha(eabHMAC, eabProtected + "." + eabPayload));
@@ -621,21 +635,11 @@ struct AcmeClientImpl
 
         return urlSafeBase64Encode(signature);
     }
-    
-    void initIfNeeded()
-    {
-        if(newAccountUrl.length() > 0) {
-            // Already initialized
-            return;
-        }
-        
-        AcmeClient::init();
-    }
 
     template<typename T>
     T sendRequest(const string& url, const string& payload, pair<string, string> * header = nullptr)
     {
-        string nonce = nextNonce_.length() > 0 ? nextNonce_ :  getHeader(newNonceUrl, "replay-nonce");
+        string nonce = nextNonce_.length() > 0 ? nextNonce_ :  getHeader(newNonceUrl_, "replay-nonce");
         nextNonce_ = ""; // Must only be used once
         
         string protectd = R"({"nonce": ")"s + nonce + "\"," +
@@ -679,7 +683,8 @@ struct AcmeClientImpl
             std::this_thread::sleep_for(chrono::seconds(1));
             string response = doPostAsGet(url);
             auto json = nlohmann::json::parse(response);
-            if (json.at("status") == "valid")
+			auto status = json.at("status");
+            if (status == "valid" || status == "ready")
             {
                 return;
             }
@@ -704,12 +709,15 @@ struct AcmeClientImpl
     }
 
     Certificate issueCertificate(const list<string>& domainNames, AcmeClient::Callback callback)
-    {
-        initIfNeeded();
-        
+    {   
         if (domainNames.empty())
         {
             throw AcmeException("There must be at least one domain name in a certificate");
+        }
+
+        if(!accountIsSetup()) 
+        {
+            throw AcmeException("No account setup. Call setupAccount() first.");
         }
 
         // Create the order        
@@ -743,7 +751,7 @@ struct AcmeClientImpl
         payload += "]}";
 
         pair<string, string> header = make_pair("location"s, ""s);
-        string response = sendRequest<string>(newOrderUrl, payload, &header);
+        string response = sendRequest<string>(newOrderUrl_, payload, &header);
         string currentOrderUrl = header.second;
 
         // Pass the challenges
@@ -780,18 +788,31 @@ struct AcmeClientImpl
                 }
             }
         }
+		
+        // Wait for the certificate to be produced
+        wait(currentOrderUrl, "Timeout / failure waiting for certificate to be produced");
 
         // Request the certificate
         auto r = makeCertificateSigningRequest(domainNames);
         string csr = r.first;
         string privateKey = r.second;
-        string certificateUrl = nlohmann::json::parse(sendRequest<vector<char>>(json.at("finalize"),
+		auto finalizeUrl = json.at("finalize");
+		auto finalizeJson = nlohmann::json::parse(sendRequest<vector<char>>(finalizeUrl,
                                                 R"(   {
                                                             "csr": ")"s + csr + R"("
-                                                        })")).at("certificate");
-
+                                                        })"));
+        string certificateUrl;
+		const char *certKey = "certificate";
+		if(finalizeJson.contains(certKey)) {
+			certificateUrl = finalizeJson.at("certificate");
+		}
+		
         // Wait for the certificate to be produced
         wait(currentOrderUrl, "Timeout / failure waiting for certificate to be produced");
+		
+		if(!certificateUrl.length()) {
+			certificateUrl = nlohmann::json::parse(doPostAsGet(currentOrderUrl)).at(certKey);
+		}
 
         // Retreive the certificate
         Certificate cert;
@@ -800,58 +821,51 @@ struct AcmeClientImpl
         return cert;
     }
 
+    const std::string& getTermsOfServiceUrl() const
+    {
+        return termsOfServiceUrl_;
+    }
+
 private:
     string      headerSuffix_;
     EVP_PKEYptr privateKey_;
     string      jwkThumbprint_;
     string      nextNonce_;
+    
+    static string      newAccountUrl_;
+    static string      newOrderUrl_;
+    static string      newNonceUrl_;
+
+    static string      termsOfServiceUrl_;
 };
 
-AcmeClient::AcmeClient(const string& accountPrivateKey, bool allowCreateNew, const std::string &email,
-        const std::string &eabKID, const std::string &eabHMAC)
-    : impl_(new AcmeClientImpl(accountPrivateKey, allowCreateNew, email, eabKID, eabHMAC))
+string AcmeClientImpl::newAccountUrl_;
+string AcmeClientImpl::newOrderUrl_;
+string AcmeClientImpl::newNonceUrl_;
+string AcmeClientImpl::termsOfServiceUrl_;
+
+
+AcmeClient::AcmeClient(const std::string &directoryUrl)
+    : impl_(new AcmeClientImpl(directoryUrl))
 {
 }
 
 AcmeClient::~AcmeClient() = default;
+
+void AcmeClient::setupAccount(const string& accountPrivateKey, bool allowCreateNew, const std::string &email,
+        const std::string &eabKID, const std::string &eabHMAC) 
+{
+    impl_->setupAccount(accountPrivateKey, allowCreateNew, email, eabKID, eabHMAC);
+}
 
 Certificate AcmeClient::issueCertificate(const std::list<std::string>& domainNames, Callback callback)
 {
     return impl_->issueCertificate(domainNames, callback);
 }
 
-const std::string& AcmeClient::getTermsOfServiceUrl()
+const std::string& AcmeClient::getTermsOfServiceUrl() const
 {
-    return termsOfServiceUrl;
-}
-
-void AcmeClient::init(const std::string& directoryUrl)
-{
-    
-    try
-    {
-        std::string url = directoryUrl;
-        if(!url.length())
-        {
-            url = letsEncryptDirectoryUrl;
-        }
-        
-        string directory = toT<string>(doGet(url));
-        auto json = nlohmann::json::parse(directory);
-        newAccountUrl = json.at("newAccount");
-        newOrderUrl = json.at("newOrder");
-        newNonceUrl = json.at("newNonce");
-        termsOfServiceUrl = json["meta"].at("termsOfService");
-    }
-    catch (const exception& e)
-    {
-        throw AcmeException("Unable to initialize endpoints from "s + directoryUrl + ": " + e.what());
-    }
-}
-
-void AcmeClient::teardown()
-{
-    
+    return impl_->getTermsOfServiceUrl();
 }
 
 ::time_t Certificate::getExpiry() const
