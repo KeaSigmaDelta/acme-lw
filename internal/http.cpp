@@ -15,6 +15,7 @@ using namespace acme_lw;
 namespace
 {
 
+#ifndef NO_ACME_LW_CURL_GLOBAL_INIT
 /** Handles automatic CURL initialization & teardown.
  */
 class CURLGlobalInit {
@@ -31,7 +32,8 @@ private:
 
     static CURLGlobalInit curlGlobalInit_;
 }
-
+#endif
+    
 CURLGlobalInit::curlGlobalInit_;
 
 
